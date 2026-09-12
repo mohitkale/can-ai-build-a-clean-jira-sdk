@@ -108,7 +108,7 @@ functions: **0** (pagination/retry helpers are fully generic).
 | Integration tests (auth, URL, serialization, pagination, errors, retry) | VERIFIED | 26/26 pass at the transport boundary |
 | Documentation examples compile + use real APIs | VERIFIED | 3/3 type-checked; README symbols grepped against generated exports |
 | npm pack (exports, ESM+CJS+d.ts, contents, bundle smoke test) | VERIFIED | Dry-run + Node CJS/ESM smoke test pass |
-| Repository/homepage/issues URLs in package metadata | PARTIALLY VERIFIED | Fields present and well-formed, but no git remote exists to confirm the owner/name — update before publishing |
+| Repository/homepage/issues URLs in package metadata | VERIFIED | Remote `origin` is `https://github.com/mohitkale/can-ai-build-a-clean-jira-sdk.git`, matching `repository`, `homepage`, and `bugs` fields |
 | Live Jira calls (real tenant, real network) | NOT VERIFIED | No credentials/network in this environment; transport-boundary tests are the deepest proof available here |
 
 The library is **not** labeled "production-ready": live-tenant verification and
