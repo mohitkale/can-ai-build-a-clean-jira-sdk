@@ -1,0 +1,11 @@
+---
+description: Require every agent session to read AGENTS.md before modifying the repo
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+Before modifying any file in this repository, read `AGENTS.md` at the repository
+root and follow it. It is the permanent engineering contract: generated code is
+read-only, handwritten code stays minimal, configuration must reach the wire,
+and claims require verification.
