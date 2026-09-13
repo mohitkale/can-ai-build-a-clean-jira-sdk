@@ -16,6 +16,36 @@ response type comes from the pinned spec — nothing is hand-copied.
 > `npm run typecheck:examples`). Operation names are the generator's verbatim
 > exports (`getIssue`, `createIssue`, …).
 
+## Background: the challenge
+
+This repo is an experiment answering a public challenge from
+[@DonBlavio](https://x.com/DonBlavio): can AI build a wrapper library around
+the **full** Jira Cloud API spec in TypeScript — types generated from the
+schema docs (via `openapi-ts`), all methods covered — without producing the
+usual AI-generated monstrosity?
+
+The hypothesis under test: keep the AI away from repetitive endpoint code
+entirely. Deterministic generation covers every operation; handwritten code
+is limited to client configuration, generic pagination, and error handling.
+
+## Experiment results
+
+- **Coverage:** 617/617 OpenAPI operations by HTTP-method+path identity
+  (`npm run coverage`), 0 missing, 0 extra.
+- **Handwritten surface:** 433 lines, 0 endpoint-specific functions, 0 `any`.
+- **Independent verification:** a separate verification pass
+  (`VERIFICATION_REPORT.md`) exercised real generated operations at the HTTP
+  boundary — auth, base URL, serialization, errors/retry, pagination — with
+  the test suite green (68/68) plus independent wire-level probes.
+  Verdict: **PASS**.
+- **External review held up:** review feedback caught a dead runtime
+  dependency (`@hey-api/client-axios`, removed) and credential exposure via
+  error `cause` (fixed with `Authorization` redaction + regression tests).
+  Both fixes are committed with green gates.
+- **Known open gap:** no live-tenant calls (no credentials in this
+  environment); transport-boundary tests are the deepest proof available.
+  Tracked as NOT VERIFIED in `QUALITY_REPORT.md`, not claimed.
+
 ## Install
 
 ```sh
