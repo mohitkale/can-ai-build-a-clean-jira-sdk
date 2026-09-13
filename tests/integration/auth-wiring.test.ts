@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createJiraClient, updateJiraClient } from '../../src/client.js';
 import type { JiraConfig } from '../../src/client.js';
+import { JiraApiError, REDACTED_CREDENTIAL, throwIfJiraError } from '../../src/errors.js';
 import { getIssue } from '../../src/generated/sdk.gen.js';
 import { createTestTransport, staticTransport } from '../helpers/test-transport.js';
 import type { MockResponder, TestTransport } from '../helpers/test-transport.js';
@@ -112,5 +113,23 @@ describe('authentication wiring', () => {
     await getIssue({ client, path: { issueIdOrKey: 'PROJ-1' } });
 
     expect(transport.requests[0]?.headers['Authorization']).toBeUndefined();
+  });
+
+  it('redacts the Authorization credential from stored error causes', async () => {
+    const { client } = testClient(() => ({ status: 401, body: { errorMessages: ['Unauthorized.'] } }));
+
+    const result = await getIssue({ client, path: { issueIdOrKey: 'PROJ-1' } });
+    let caught: unknown;
+    try {
+      throwIfJiraError(result);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(JiraApiError);
+    const cause = (caught as JiraApiError).cause as { config: { headers: unknown } };
+    const headers = cause.config.headers as unknown as Record<string, unknown>;
+    expect(headers['Authorization']).toBe(REDACTED_CREDENTIAL);
+    expect(JSON.stringify(cause.config.headers)).not.toContain('api-token-123');
   });
 });

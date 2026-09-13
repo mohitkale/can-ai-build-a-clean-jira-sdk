@@ -12,6 +12,79 @@
 
 export const RETRYABLE_STATUS_CODES: readonly number[] = [429, 502, 503, 504];
 
+/**
+ * Request header names whose values are credentials. Axios errors carry the
+ * live request config (including these headers), so attaching one untouched
+ * as `cause` would expose credentials to anything serializing cause chains
+ * (deep logs, error aggregators). Compared case-insensitively.
+ */
+const SENSITIVE_HEADERS: ReadonlySet<string> = new Set(['authorization', 'proxy-authorization']);
+
+/** Sentinel replacing redacted credential values on a stored `cause`. */
+export const REDACTED_CREDENTIAL = '[REDACTED]';
+
+/**
+ * Return `error` with credential-bearing request headers redacted.
+ *
+ * Values without a request config pass through untouched (same reference).
+ * Otherwise a structural clone is returned — the caller's objects are never
+ * mutated — with every live config redacted. Two locations are covered: a
+ * top-level `config` (axios errors, and the generator's error result, which
+ * merges the axios error fields) and `response.config` (the raw response
+ * nested in both shapes, usually the same instance — redacted once, reused).
+ * Header entries are own enumerable properties on both plain-object headers
+ * and axios `AxiosHeaders` instances, so one path covers both shapes.
+ */
+export function sanitizeErrorCause(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null) return error;
+  // Narrowed by the typeof/null guard above; reads only known fields.
+  const record = error as Record<string, unknown>;
+  const response =
+    typeof record['response'] === 'object' && record['response'] !== null
+      ? (record['response'] as Record<string, unknown>)
+      : undefined;
+  const configObjs = [record['config'], response?.['config']].filter(
+    (candidate): candidate is Record<string, unknown> =>
+      typeof candidate === 'object' && candidate !== null,
+  );
+  // Redact each distinct headers object once (configs usually share one).
+  const replacements = new Map<object, Record<string, unknown>>();
+  for (const config of configObjs) {
+    const raw = config['headers'];
+    if (typeof raw !== 'object' || raw === null || replacements.has(raw)) continue;
+    const copy = { ...(raw as Record<string, unknown>) };
+    let touched = false;
+    for (const name of Object.keys(copy)) {
+      if (SENSITIVE_HEADERS.has(name.toLowerCase())) {
+        copy[name] = REDACTED_CREDENTIAL;
+        touched = true;
+      }
+    }
+    if (touched) replacements.set(raw, copy);
+  }
+  if (replacements.size === 0) return error;
+  // Rebuild prototype-preserving clones along the edited paths only.
+  const root = shallowClone(record);
+  let responseClone: Record<string, unknown> | undefined;
+  for (const config of new Set(configObjs)) {
+    const headers = replacements.get(config['headers'] as object);
+    if (headers === undefined) continue;
+    const newConfig = { ...config, headers };
+    if (config === record['config']) root['config'] = newConfig;
+    if (response !== undefined && config === response['config']) {
+      if (responseClone === undefined) responseClone = shallowClone(response);
+      responseClone['config'] = newConfig;
+    }
+  }
+  if (responseClone !== undefined) root['response'] = responseClone;
+  return root;
+}
+
+/** Prototype-preserving shallow clone (keeps `instanceof` and `stack`). */
+function shallowClone(source: Record<string, unknown>): Record<string, unknown> {
+  return Object.assign(Object.create(Object.getPrototypeOf(source)), source);
+}
+
 export interface JiraApiErrorDetails {
   status?: number | undefined;
   message: string;
@@ -97,7 +170,7 @@ export function toJiraApiError(error: unknown): JiraApiError {
     const headers = error.response?.headers;
     if (status === undefined) {
       const message = typeof error.message === 'string' ? error.message : 'network error';
-      return new JiraApiError({ message: `Jira request failed: ${message}.`, cause: error });
+      return new JiraApiError({ message: `Jira request failed: ${message}.`, cause: sanitizeErrorCause(error) });
     }
     const body: unknown = error.response?.data;
     return new JiraApiError({
@@ -105,11 +178,11 @@ export function toJiraApiError(error: unknown): JiraApiError {
       message: messageFor(status, body),
       errorBody: body,
       retryAfterMs: parseRetryAfter(headers),
-      cause: error,
+      cause: sanitizeErrorCause(error),
     });
   }
   if (error instanceof Error) {
-    return new JiraApiError({ message: error.message, cause: error });
+    return new JiraApiError({ message: error.message, cause: sanitizeErrorCause(error) });
   }
   return new JiraApiError({ message: 'Jira request failed with an unknown error.', cause: error });
 }
@@ -138,7 +211,9 @@ export function throwIfJiraError<TData, TError>(result: JiraResult<TData, TError
       message: messageFor(status, body),
       errorBody: body,
       retryAfterMs: parseRetryAfter(response?.headers),
-      cause: result,
+      // The generator's error result merges the axios error fields (including
+      // the live request config), so it needs the same redaction as throws.
+      cause: sanitizeErrorCause(result),
     });
   }
   // Safe: the generated union guarantees `data` is present when `error` is absent.

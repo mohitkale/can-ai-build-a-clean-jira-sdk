@@ -101,3 +101,39 @@ The implementation agent's self-audit (`QUALITY_REPORT.md`) survived independent
 3. Is the handwritten implementation reasonably succinct? **Yes** — 433 LOC, no file near 300 lines, zero endpoint-specific methods, zero `any`.
 4. Are the tests strong enough to justify the claims? **Yes** — 63/63 green, integration tests exercise real generated operations at the transport boundary, and an independent 58-assertion probe against the built package corroborates them.
 5. Would you approve this challenge as successfully completed? **Yes — PASS**, with the disclosed caveat that live-tenant verification remains open (as `QUALITY_REPORT.md` already states).
+
+## Addendum (2026-09-14): post-verification findings fixed
+
+External review of this report's commit raised two further claims. Both were
+re-checked against the code and confirmed — fixes below, all gates re-run.
+
+1. **Unused runtime dependency.** `@hey-api/client-axios` was declared in
+   `dependencies` but imported nowhere: the generated client
+   (`src/generated/client/client.gen.ts`) imports `axios` directly, and the
+   built bundles contain zero references to the package. (Precise transport:
+   generated client over `axios` directly; the `@hey-api/client-axios` entry
+   in `openapi-ts.config.ts` is a generator plugin string resolved from the
+   dev-time `@hey-api/openapi-ts` package, which is unchanged.) **Fix:**
+   `npm uninstall @hey-api/client-axios`; regeneration from the pinned spec
+   re-verified byte-identical without it.
+2. **Credential exposure via error `cause`.** `JiraApiError.cause` held the raw
+   axios error, so `cause.config.headers.Authorization` (reversibly
+   base64-encoded Basic credentials) was reachable by anything serializing
+   cause chains — demonstrated, not theorized. Worse than first thought: the
+   generator's non-throwing error result merges the axios error fields, so the
+   live config was reachable at both `cause.config` and
+   `cause.response.config` (same instance). **Fix:** `sanitizeErrorCause()`
+   in `src/errors.ts` redacts `authorization`/`proxy-authorization` at both
+   locations via prototype-preserving clones (caller's error never mutated),
+   applied in `toJiraApiError()` and `throwIfJiraError()`; new exports
+   `sanitizeErrorCause`/`REDACTED_CREDENTIAL`. The live request is unaffected
+   (redaction touches only the stored copy, post-flight).
+
+Re-verification after fixes: `generate` (byte-identical), `coverage`
+(617/617), `typecheck`, `typecheck:examples`, `lint`, `vitest` **68/68**
+(63 prior + 5 new redaction tests, including one that caught an incomplete
+first version of the fix), `build`, `pack --dry-run`, plus an 8-assertion
+independent probe against rebuilt `dist/` (redaction in both error modes,
+original error unmutated, wire still sends real credentials). `src/errors.ts`
+is 272 lines (under the ~300 guideline); `any` count still 0. Verdict
+unchanged: **PASS**.

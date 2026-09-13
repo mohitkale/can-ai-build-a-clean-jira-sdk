@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { AxiosHeaders } from 'axios';
 
 import {
   isRetryableError,
   isRetryableStatus,
   JiraApiError,
   parseRetryAfter,
+  REDACTED_CREDENTIAL,
+  sanitizeErrorCause,
   throwIfJiraError,
   toJiraApiError,
   withRetry,
@@ -64,6 +67,72 @@ describe('throwIfJiraError', () => {
     }
     expect(caught).toBeInstanceOf(JiraApiError);
     expect((caught as JiraApiError).status).toBe(401);
+  });
+});
+
+describe('sanitizeErrorCause', () => {
+  it('redacts credential headers without mutating the original error', () => {
+    class FakeAxiosError extends Error {
+      config: { headers: Record<string, string> };
+      constructor() {
+        super('Request failed with status code 401');
+        this.config = { headers: { Authorization: 'Basic QUJD', Accept: 'application/json' } };
+      }
+    }
+    const original = new FakeAxiosError();
+    const sanitized = sanitizeErrorCause(original) as FakeAxiosError;
+
+    expect(sanitized).not.toBe(original);
+    expect(sanitized).toBeInstanceOf(FakeAxiosError);
+    expect(sanitized.config.headers['Authorization']).toBe(REDACTED_CREDENTIAL);
+    expect(sanitized.config.headers['Accept']).toBe('application/json');
+    expect(original.config.headers['Authorization']).toBe('Basic QUJD');
+  });
+
+  it('redacts real AxiosHeaders instances while keeping status parsing intact', () => {
+    const headers = new AxiosHeaders({ authorization: 'Bearer secret', 'Content-Type': 'application/json' });
+    const error = {
+      config: { headers },
+      message: 'Request failed with status code 401',
+      response: { status: 401, data: { errorMessages: ['Unauthorized.'] }, headers: {} },
+    };
+    const normalized = toJiraApiError(error);
+    const cause = normalized.cause as { config: { headers: unknown } };
+    const stored = cause.config.headers as unknown as Record<string, unknown>;
+
+    expect(stored['authorization']).toBe(REDACTED_CREDENTIAL);
+    expect(stored['Content-Type']).toBe('application/json');
+    expect(headers.get('authorization')).toBe('Bearer secret');
+    expect(normalized.status).toBe(401);
+    expect(normalized.message).toContain('Unauthorized.');
+  });
+
+  it('redacts credentials nested under response.config sharing one instance', () => {
+    const shared = { headers: { Authorization: 'Basic QUJD' } };
+    const error = {
+      config: shared,
+      message: 'Request failed with status code 401',
+      response: { status: 401, data: {}, headers: {}, config: shared },
+    };
+    const out = sanitizeErrorCause(error) as typeof error;
+
+    expect(out).not.toBe(error);
+    const top = out.config.headers as unknown as Record<string, unknown>;
+    const nested = (out.response.config as { headers: unknown }).headers as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(top['Authorization']).toBe(REDACTED_CREDENTIAL);
+    expect(nested['Authorization']).toBe(REDACTED_CREDENTIAL);
+    expect((shared.headers as Record<string, unknown>)['Authorization']).toBe('Basic QUJD');
+  });
+
+  it('passes errors without a request config through unchanged', () => {
+    const plain = new Error('boom');
+    expect(sanitizeErrorCause(plain)).toBe(plain);
+    expect(sanitizeErrorCause('nope')).toBe('nope');
+    const noAuth = { config: { headers: { Accept: 'application/json' } } };
+    expect(sanitizeErrorCause(noAuth)).toBe(noAuth);
   });
 });
 
